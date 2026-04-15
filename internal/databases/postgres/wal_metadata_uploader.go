@@ -68,14 +68,20 @@ func (u *WalMetadataUploader) UploadWalMetadata(
 	if err != nil {
 		return errors.Wrapf(err, "Unable to marshal walmetadata")
 	}
+
+	metadataUploader := uploader
+	if isWalFilename(walFileName) {
+		metadataUploader = partitionedUploaderFor(uploader, walFileName)
+	}
+
 	if u.useBulkMetadataUpload {
 		err = u.walMetadataFolder.PutObject(walMetadataName, bytes.NewReader(dtoBody))
 		if err != nil {
 			return errors.Wrapf(err, "upload: could not Upload metadata'%s'\n", walFileName)
 		}
-		err = u.uploadBulkMetadataFile(ctx, walFileName, uploader)
+		err = u.uploadBulkMetadataFile(ctx, walFileName, metadataUploader)
 	} else {
-		err = uploader.Upload(ctx, walMetadataName, bytes.NewReader(dtoBody))
+		err = metadataUploader.Upload(ctx, walMetadataName, bytes.NewReader(dtoBody))
 	}
 	return errors.Wrapf(err, "upload: could not Upload metadata'%s'\n", walFileName)
 }

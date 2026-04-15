@@ -66,7 +66,12 @@ func (walUploader *WalUploader) UploadWalFile(ctx context.Context, file ioextens
 		walFileReader = file
 	}
 
-	return walUploader.UploadFile(ctx, ioextensions.NewNamedReaderImpl(walFileReader, file.Name()))
+	uploader := walUploader.Uploader
+	if isWalFilename(filename) {
+		uploader = partitionedUploaderFor(uploader, filename)
+	}
+
+	return uploader.UploadFile(ctx, ioextensions.NewNamedReaderImpl(walFileReader, file.Name()))
 }
 
 func (walUploader *WalUploader) FlushFiles(ctx context.Context) {

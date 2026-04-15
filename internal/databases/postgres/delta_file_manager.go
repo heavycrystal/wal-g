@@ -168,7 +168,11 @@ func (manager *DeltaFileManager) FlushDeltaFiles(ctx context.Context, uploader i
 					"Failed to upload delta file: '%s' because of saving error: '%v'\n",
 					deltaFilename, err)
 			} else {
-				err = uploader.UploadFile(ctx, ioextensions.NewNamedReaderImpl(&deltaFileData, deltaFilename))
+				deltaUploader := uploader
+				if len(deltaFilename) >= 16 {
+					deltaUploader = partitionedUploaderFor(uploader, deltaFilename)
+				}
+				err = deltaUploader.UploadFile(ctx, ioextensions.NewNamedReaderImpl(&deltaFileData, deltaFilename))
 				if err != nil {
 					tracelog.WarningLogger.Printf(
 						"Failed to upload delta file: '%s' because of uploading error: '%v'\n",

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"fmt"
+	"path"
 
 	"github.com/pkg/errors"
 	"github.com/wal-g/tracelog"
@@ -107,15 +108,24 @@ func (r *WalSegmentRunner) getNextSegment() WalSegmentDescription {
 	return WalSegmentDescription{Timeline: nextTimeline, Number: nextSegmentNo}
 }
 
-// getFolderFilenames returns a set of filenames in provided storage folder
+// getFolderFilenames returns a set of filenames in provided storage folder.
+// When WAL partitioning is enabled it walks subdirectories recursively;
+// otherwise it stays non-recursive to avoid an O(N) scan over the whole WAL
+// prefix on every call. path.Base normalizes both layouts to a bare filename.
 func getFolderFilenames(folder storage.Folder) ([]string, error) {
-	objects, _, err := folder.ListFolder()
+	var objects []storage.Object
+	var err error
+	if IsWalPartitioningEnabled() {
+		objects, err = storage.ListFolderRecursively(folder)
+	} else {
+		objects, _, err = folder.ListFolder()
+	}
 	if err != nil {
 		return nil, err
 	}
 	filenames := make([]string, 0, len(objects))
 	for _, object := range objects {
-		filenames = append(filenames, object.GetName())
+		filenames = append(filenames, path.Base(object.GetName()))
 	}
 	return filenames, nil
 }

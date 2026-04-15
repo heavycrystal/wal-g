@@ -90,7 +90,7 @@ func HandleWALFetch(baseReader internal.StorageFolderReader, walFileName string,
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	return internal.DownloadFileTo(reader, walFileName, location)
+	return downloadWalFileWithPartitionFallback(reader, walFileName, location)
 }
 
 // TODO : unit tests

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"path"
 	"strings"
 
 	"github.com/wal-g/tracelog"
@@ -69,12 +70,18 @@ func GetPermanentBackupsAndWals(folder storage.Folder) (map[PermanentObject]bool
 }
 
 func IsPermanent(objectName, storageName string, permanentBackups, permanentWals map[PermanentObject]bool) bool {
-	if strings.HasPrefix(objectName, utility.WalPath) && len(objectName) >= len(utility.WalPath)+24 {
-		wal := PermanentObject{
-			Name:        objectName[len(utility.WalPath) : len(utility.WalPath)+24],
-			StorageName: storageName,
+	if strings.HasPrefix(objectName, utility.WalPath) {
+		// Extract the WAL filename from the object path.
+		// Handles both flat (wal_005/XXXX...) and partitioned (wal_005/prefix/XXXX...) layouts.
+		walRelPath := objectName[len(utility.WalPath):]
+		walBaseName := utility.TrimFileExtension(path.Base(walRelPath))
+		if len(walBaseName) >= 24 {
+			wal := PermanentObject{
+				Name:        walBaseName[:24],
+				StorageName: storageName,
+			}
+			return permanentWals[wal]
 		}
-		return permanentWals[wal]
 	}
 	if strings.HasPrefix(objectName, utility.BaseBackupPath) {
 		backup := PermanentObject{

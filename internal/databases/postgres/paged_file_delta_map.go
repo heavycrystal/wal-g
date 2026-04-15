@@ -173,7 +173,7 @@ func (deltaMap *PagedFileDeltaMap) getLocationsFromWals(reader internal.StorageF
 
 func (deltaMap *PagedFileDeltaMap) getLocationsFromWal(
 	folderReader internal.StorageFolderReader, filename string, walParser *walparser.WalParser) error {
-	reader, err := internal.DownloadAndDecompressStorageFile(folderReader, filename)
+	reader, err := downloadStorageFileWithPartitionFallback(folderReader, filename)
 	if err != nil {
 		return errors.Wrapf(err, "Error during wal segment'%s' downloading.", filename)
 	}
@@ -190,7 +190,7 @@ func (deltaMap *PagedFileDeltaMap) getLocationsFromWal(
 }
 
 func getDeltaFile(folderReader internal.StorageFolderReader, filename string) (*DeltaFile, error) {
-	reader, err := internal.DownloadAndDecompressStorageFile(folderReader, filename)
+	reader, err := downloadStorageFileWithPartitionFallback(folderReader, filename)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error during delta file '%s' downloading.", filename)
 	}

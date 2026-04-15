@@ -40,6 +40,7 @@ const (
 	SentinelUserDataSetting       = "WALG_SENTINEL_USER_DATA"
 	PreventWalOverwriteSetting    = "WALG_PREVENT_WAL_OVERWRITE"
 	UploadWalMetadata             = "WALG_UPLOAD_WAL_METADATA"
+	PgWalPartitioning             = "WALG_WAL_PARTITIONING"
 	DeltaMaxStepsSetting          = "WALG_DELTA_MAX_STEPS"
 	DeltaOriginSetting            = "WALG_DELTA_ORIGIN"
 	CompressionMethodSetting      = "WALG_COMPRESSION_METHOD"
@@ -261,6 +262,7 @@ var (
 		DownloadFileRetriesSetting:   "15",
 		PreventWalOverwriteSetting:   "false",
 		UploadWalMetadata:            "NOMETADATA",
+		PgWalPartitioning:            "false",
 		DeltaMaxStepsSetting:         "0",
 		CompressionMethodSetting:     "lz4",
 		UseWalDeltaSetting:           "false",
@@ -360,6 +362,7 @@ var (
 		SentinelUserDataSetting:       true,
 		PreventWalOverwriteSetting:    true,
 		UploadWalMetadata:             true,
+		PgWalPartitioning:             true,
 		DeltaMaxStepsSetting:          true,
 		DeltaOriginSetting:            true,
 		CompressionMethodSetting:      true,

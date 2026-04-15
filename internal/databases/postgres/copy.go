@@ -109,10 +109,12 @@ func HistoryCopyingInfo(backup Backup, from storage.Folder, to storage.Folder, w
 }
 
 func GetWalFileName(filename string) string {
-	if !strings.Contains(filename, ".") {
-		return filename
+	// Use base name to handle both flat and partitioned WAL layouts
+	baseName := path.Base(filename)
+	if !strings.Contains(baseName, ".") {
+		return baseName
 	}
-	return strings.Split(filename, ".")[0]
+	return strings.Split(baseName, ".")[0]
 }
 
 func WildcardInfo(from storage.Folder, to storage.Folder) ([]copy.InfoProvider, error) {

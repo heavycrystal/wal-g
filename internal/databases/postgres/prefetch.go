@@ -214,7 +214,7 @@ func prefetchFile(location string, reader internal.StorageFolderReader, walFileN
 	}
 
 	tracelog.DebugLogger.Printf("File prefetched to %s", oldPath)
-	err = internal.DownloadFileTo(reader, walFileName, oldPath)
+	err = downloadWalFileWithPartitionFallback(reader, walFileName, oldPath)
 	if err != nil {
 		tracelog.ErrorLogger.Printf("WAL-prefetch %s, download: %v", walFileName, err)
 	} else {
