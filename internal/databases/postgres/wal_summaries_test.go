@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/wal-g/wal-g/internal/walparser"
@@ -264,7 +263,7 @@ func TestParseWalSummaryFile_ArrayChunk(t *testing.T) {
 		[]summaryEntryChunk{{array: []uint16{10, 20, 30}}})
 	path := writeTempSummary(t, b.finish())
 
-	state := make(map[relForkKey]*roaring.Bitmap)
+	state := make(map[relForkKey]*walSummaryEntry)
 	require.NoError(t, parseWalSummaryFile(path, state))
 
 	key := relForkKey{
@@ -272,7 +271,7 @@ func TestParseWalSummaryFile_ArrayChunk(t *testing.T) {
 		forkNum: mainForkNum,
 	}
 	require.Contains(t, state, key)
-	got := state[key].ToArray()
+	got := state[key].blocks.ToArray()
 	assert.Equal(t, []uint32{10, 20, 30}, got)
 }
 
@@ -288,7 +287,7 @@ func TestParseWalSummaryFile_BitmapChunk(t *testing.T) {
 		[]summaryEntryChunk{{bitmap: bitmap}})
 	path := writeTempSummary(t, b.finish())
 
-	state := make(map[relForkKey]*roaring.Bitmap)
+	state := make(map[relForkKey]*walSummaryEntry)
 	require.NoError(t, parseWalSummaryFile(path, state))
 
 	key := relForkKey{
@@ -296,7 +295,7 @@ func TestParseWalSummaryFile_BitmapChunk(t *testing.T) {
 		forkNum: mainForkNum,
 	}
 	require.Contains(t, state, key)
-	assert.Equal(t, []uint32{0, 1, 15, 16, 17}, state[key].ToArray())
+	assert.Equal(t, []uint32{0, 1, 15, 16, 17}, state[key].blocks.ToArray())
 }
 
 func TestParseWalSummaryFile_LimitBlockPrunesEarlierBlocks(t *testing.T) {
@@ -313,7 +312,7 @@ func TestParseWalSummaryFile_LimitBlockPrunesEarlierBlocks(t *testing.T) {
 	b2.writeEntry(1663, 16385, 7, mainForkNum, 15, nil)
 	p2 := writeTempSummary(t, b2.finish())
 
-	state := make(map[relForkKey]*roaring.Bitmap)
+	state := make(map[relForkKey]*walSummaryEntry)
 	require.NoError(t, parseWalSummaryFile(p1, state))
 	require.NoError(t, parseWalSummaryFile(p2, state))
 
@@ -322,13 +321,13 @@ func TestParseWalSummaryFile_LimitBlockPrunesEarlierBlocks(t *testing.T) {
 		forkNum: mainForkNum,
 	}
 	require.Contains(t, state, key)
-	assert.Equal(t, []uint32{5, 10}, state[key].ToArray())
+	assert.Equal(t, []uint32{5, 10}, state[key].blocks.ToArray())
 }
 
 func TestParseWalSummaryFile_BadMagic(t *testing.T) {
 	data := []byte{0xde, 0xad, 0xbe, 0xef}
 	path := writeTempSummary(t, data)
-	err := parseWalSummaryFile(path, make(map[relForkKey]*roaring.Bitmap))
+	err := parseWalSummaryFile(path, make(map[relForkKey]*walSummaryEntry))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "magic")
 }
@@ -342,7 +341,7 @@ func TestParseWalSummaryFile_BadCRC(t *testing.T) {
 	// Flip the last byte of the CRC footer.
 	data[len(data)-1] ^= 0xFF
 	path := writeTempSummary(t, data)
-	err := parseWalSummaryFile(path, make(map[relForkKey]*roaring.Bitmap))
+	err := parseWalSummaryFile(path, make(map[relForkKey]*walSummaryEntry))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CRC")
 }
@@ -353,7 +352,7 @@ func TestParseWalSummaryFile_RejectsBadForkNum(t *testing.T) {
 	b.writeEntry(1663, 16385, 100, maxForkNum+1, invalidBlockNumber,
 		[]summaryEntryChunk{{array: []uint16{10}}})
 	path := writeTempSummary(t, b.finish())
-	err := parseWalSummaryFile(path, make(map[relForkKey]*roaring.Bitmap))
+	err := parseWalSummaryFile(path, make(map[relForkKey]*walSummaryEntry))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fork number")
 }
@@ -368,7 +367,7 @@ func TestParseWalSummaryFile_RejectsOversizedChunkArray(t *testing.T) {
 		require.NoError(t, binary.Write(&b.buf, binary.LittleEndian, v))
 	}
 	path := writeTempSummary(t, b.buf.Bytes())
-	err := parseWalSummaryFile(path, make(map[relForkKey]*roaring.Bitmap))
+	err := parseWalSummaryFile(path, make(map[relForkKey]*walSummaryEntry))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "oversized chunk array")
 }

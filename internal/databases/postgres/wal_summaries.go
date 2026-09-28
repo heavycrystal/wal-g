@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/pkg/errors"
@@ -58,61 +59,109 @@ type walSummaryFile struct {
 // [firstUsedLSN, firstNotUsedLSN) across the timelines this server descends
 // from, verifies contiguous coverage per timeline, parses the summaries in
 // chronological order, and returns the combined set of changed MAIN_FORKNUM
-// blocks as a PagedFileDeltaMap.
+// blocks and the relations/database-tablespace pairs that must be copied fully.
 func ReadWalSummariesForRange(pgDataDir string, timeline uint32,
-	firstUsedLSN, firstNotUsedLSN LSN) (PagedFileDeltaMap, error) {
+	firstUsedLSN, firstNotUsedLSN LSN) (PagedFileDeltaMap, walSummaryInvalidations, error) {
 	if firstNotUsedLSN <= firstUsedLSN {
-		return nil, errors.Errorf("empty LSN range [%s, %s)", firstUsedLSN, firstNotUsedLSN)
+		return nil, nil, errors.Errorf("empty LSN range [%s, %s)", firstUsedLSN, firstNotUsedLSN)
 	}
 	history, err := readLocalTimelineHistory(pgDataDir, timeline)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ranges, err := walSummaryRanges(history, timeline, firstUsedLSN, firstNotUsedLSN)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	files, err := listWalSummaryFiles(filepath.Join(pgDataDir, walSummariesDir))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Ranges are ordered oldest timeline first and each selection is sorted by
 	// startLSN, so summaries are processed chronologically and truncation
 	// semantics combine correctly.
-	state := make(map[relForkKey]*roaring.Bitmap)
+	state := make(map[relForkKey]*walSummaryEntry)
 	for _, tlRange := range ranges {
 		selected, err := selectWalSummariesForRange(files, tlRange.timeline, tlRange.startLSN, tlRange.endLSN)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, f := range selected {
 			tracelog.InfoLogger.Printf("Reading WAL summary %s", filepath.Base(f.path))
 			if err := parseWalSummaryFile(f.path, state); err != nil {
-				return nil, errors.Wrapf(err, "parsing %s", f.path)
+				return nil, nil, errors.Wrapf(err, "parsing %s", f.path)
 			}
 		}
 	}
 
-	// Project main-fork entries into wal-g's PagedFileDeltaMap, which is keyed
-	// by RelFileNode (no fork). Other forks aren't paged-file-incrementable in
-	// wal-g's current model; same restriction the legacy delta path has.
+	// Keep invalidations even when no changed blocks survive. Relation number
+	// zero marks a whole database/tablespace pair, not an ordinary relation.
 	deltaMap := NewPagedFileDeltaMap()
-	for key, blocks := range state {
-		if key.forkNum != mainForkNum {
-			continue
+	invalidations := make(walSummaryInvalidations)
+	for key, entry := range state {
+		if entry.forceFull {
+			invalidations[key.rel] = true
 		}
-		if blocks.IsEmpty() {
-			continue
+		if key.forkNum == mainForkNum && !entry.blocks.IsEmpty() {
+			deltaMap[key.rel] = entry.blocks
 		}
-		deltaMap[key.rel] = blocks
 	}
-	return deltaMap, nil
+	return deltaMap, invalidations, nil
 }
 
 type relForkKey struct {
 	rel     walparser.RelFileNode
 	forkNum int32
+}
+
+type walSummaryEntry struct {
+	blocks    *roaring.Bitmap
+	forceFull bool
+}
+
+// ponytail: any finite limit forces all current relation forks/segments to be
+// copied fully; preserve per-fork reuse boundaries if copy volume warrants it.
+// RelNode == 0 invalidates the entire database/tablespace pair.
+type walSummaryInvalidations map[walparser.RelFileNode]bool
+
+func (invalidations walSummaryInvalidations) requiresFullCopy(relativePath string) bool {
+	if len(invalidations) == 0 {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(relativePath, "/"), "/")
+	var spc, db string
+	switch {
+	case len(parts) == 3 && parts[0] == DefaultTablespace:
+		spc, db = "1663", parts[1]
+	case len(parts) == 5 && parts[0] == NonDefaultTablespace:
+		spc, db = parts[1], parts[3]
+	case len(parts) == 2 && parts[0] == GlobalTablespace:
+		spc, db = "1664", "0"
+	default:
+		return false
+	}
+	spcID, err := strconv.ParseUint(spc, 10, 32)
+	if err != nil {
+		return false
+	}
+	dbID, err := strconv.ParseUint(db, 10, 32)
+	if err != nil {
+		return false
+	}
+	key := walparser.RelFileNode{SpcNode: walparser.Oid(spcID), DBNode: walparser.Oid(dbID)}
+	if invalidations[key] {
+		return true
+	}
+	// Strip fork and segment suffixes: 12345_vm.1 and 12345.1 both name 12345.
+	name := strings.SplitN(parts[len(parts)-1], "_", 2)[0]
+	name = strings.SplitN(name, ".", 2)[0]
+	relID, err := strconv.ParseUint(name, 10, 32)
+	if err != nil {
+		return false
+	}
+	key.RelNode = walparser.Oid(relID)
+	return invalidations[key]
 }
 
 // timelineRange is one timeline's slice of the LSN range needing summaries.
@@ -275,7 +324,7 @@ func selectWalSummariesForRange(files []walSummaryFile, timeline uint32,
 // entries (24 bytes) each followed by nchunks uint16 usage values plus per-chunk
 // payloads, terminated by a zero entry and a 4-byte CRC-32C (Castagnoli) over
 // everything preceding the CRC.
-func parseWalSummaryFile(path string, state map[relForkKey]*roaring.Bitmap) error {
+func parseWalSummaryFile(path string, state map[relForkKey]*walSummaryEntry) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -342,7 +391,7 @@ func parseWalSummaryFile(path string, state map[relForkKey]*roaring.Bitmap) erro
 
 func parseSummaryChunks(r io.Reader, nchunks uint32,
 	spcOid, dbOid, relNumber uint32, forkNum int32, limitBlock uint32,
-	state map[relForkKey]*roaring.Bitmap) error {
+	state map[relForkKey]*walSummaryEntry) error {
 	key := relForkKey{
 		rel: walparser.RelFileNode{
 			SpcNode: walparser.Oid(spcOid),
@@ -351,17 +400,17 @@ func parseSummaryChunks(r io.Reader, nchunks uint32,
 		},
 		forkNum: forkNum,
 	}
-	blocks, ok := state[key]
+	entry, ok := state[key]
 	if !ok {
-		blocks = roaring.New()
-		state[key] = blocks
+		entry = &walSummaryEntry{blocks: roaring.New()}
+		state[key] = entry
 	}
 
-	// Apply truncation first: drop any previously-recorded blocks >= limit.
-	// limitBlock == InvalidBlockNumber means the summary has no truncation to
-	// announce; do nothing in that case.
+	// A finite limit invalidates parent contents even if no changed blocks
+	// remain. Keep this sticky across subsequent summaries and regrowth.
 	if limitBlock != invalidBlockNumber {
-		blocks.RemoveRange(uint64(limitBlock), 1<<32)
+		entry.forceFull = true
+		entry.blocks.RemoveRange(uint64(limitBlock), 1<<32)
 	}
 
 	if nchunks == 0 {
@@ -381,7 +430,7 @@ func parseSummaryChunks(r io.Reader, nchunks uint32,
 		if used == 0 {
 			continue
 		}
-		if err := readChunk(r, blocks, uint32(chunkNo), used); err != nil {
+		if err := readChunk(r, entry.blocks, uint32(chunkNo), used); err != nil {
 			return err
 		}
 	}

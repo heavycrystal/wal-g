@@ -73,7 +73,8 @@ type Bundle struct {
 	TablespaceSpec     TablespaceSpec
 	DataCatalogSize    atomic.Int64
 
-	forceIncremental bool
+	forceIncremental     bool
+	summaryInvalidations walSummaryInvalidations
 
 	IncrementFromChkpNum *uint32
 }
@@ -273,13 +274,14 @@ func (bundle *Bundle) addToBundle(path string, info os.FileInfo) error {
 		// For details see
 		//nolint:lll    // https://www.postgresql.org/message-id/flat/F0627DEB-7D0D-429B-97A9-D321450365B4%40yandex-team.ru#F0627DEB-7D0D-429B-97A9-D321450365B4@yandex-team.ru
 
-		if (wasInBase || bundle.forceIncremental) && (time.Equal(baseFile.MTime)) {
+		forceFull := bundle.summaryInvalidations.requiresFullCopy(fileInfoHeader.Name)
+		if !forceFull && (wasInBase || bundle.forceIncremental) && time.Equal(baseFile.MTime) {
 			// File was not changed since previous backup
 			tracelog.DebugLogger.Println("Skipped due to unchanged modification time: " + path)
 			bundle.TarBallComposer.SkipFile(fileInfoHeader, info)
 			return nil
 		}
-		isIncremented := bundle.isIncremented(path, wasInBase, info)
+		isIncremented := !forceFull && bundle.isIncremented(path, wasInBase, info)
 		bundle.TarBallComposer.AddFile(internal.NewComposeFileInfo(path, info, wasInBase, isIncremented, fileInfoHeader))
 	} else {
 		err := bundle.TarBallComposer.AddHeader(fileInfoHeader, info)
@@ -427,12 +429,13 @@ func (bundle *Bundle) DownloadDeltaMap(ctx context.Context, reader internal.Stor
 // summary files under $PGDATA/pg_wal/summaries (PG17+, summarize_wal=on).
 // Increment files themselves are still emitted in wal-g's wi1 format.
 func (bundle *Bundle) LoadDeltaMapFromWalSummaries(pgDataDir string, backupStartLSN LSN) error {
-	deltaMap, err := ReadWalSummariesForRange(pgDataDir, bundle.Timeline,
+	deltaMap, invalidations, err := ReadWalSummariesForRange(pgDataDir, bundle.Timeline,
 		*bundle.IncrementFromLsn, backupStartLSN)
 	if err != nil {
 		return err
 	}
 	bundle.DeltaMap = deltaMap
+	bundle.summaryInvalidations = invalidations
 	return nil
 }
 
